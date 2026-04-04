@@ -218,6 +218,7 @@ export default function SmartRouteDashboard() {
     { id: 'performance', name: 'Performance Analysis', icon: Zap },
     { id: 'traffic', name: 'Predictive Traffic (ML)', icon: TrafficCone },
     { id: 'delivery', name: 'Logistics Optimization', icon: Package },
+    { id: 'report', name: 'Executive AI Report', icon: FileText },
   ];
 
   return (
@@ -390,13 +391,25 @@ export default function SmartRouteDashboard() {
         {/* Dynamic Content */}
         {activeTab === 'performance' && (
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-            <Card title="Comparative Search Space Analysis" icon={MapIcon} noPadding className="xl:col-span-2 h-[85vh] min-h-[750px]">
-               <iframe 
-                key={iframeKey}
-                src={`/api/assets/comparison.html?t=${iframeKey}`} 
-                className="w-full h-full border-0 bg-slate-50 block"
-               />
-            </Card>
+            <div className="xl:col-span-2 space-y-8">
+              <Card title="Comparative Search Space Analysis" icon={MapIcon} noPadding className="h-[75vh] min-h-[600px]">
+                 <iframe 
+                  key={iframeKey}
+                  src={`/api/assets/comparison.html?t=${iframeKey}`} 
+                  className="w-full h-full border-0 bg-slate-50 block"
+                 />
+              </Card>
+              
+              <Card title="Algorithmic Depth Report" icon={BarChart3}>
+                <img 
+                  key={iframeKey}
+                  src={`/api/assets/algorithm_comparison_no_traffic.png?t=${iframeKey}`}
+                  alt="Algorithm Comparison Chart"
+                  className="w-full rounded-xl shadow-lg border border-slate-100"
+                />
+              </Card>
+            </div>
+            
             <div className="space-y-8">
               <Card title="Live Model Analytics" icon={BarChart3}>
                 <div className="grid grid-cols-2 gap-4 mb-6">
@@ -443,13 +456,25 @@ export default function SmartRouteDashboard() {
 
         {activeTab === 'traffic' && (
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-            <Card title="Predictive Traffic Heatmap" icon={TrafficCone} noPadding className="xl:col-span-2 h-[85vh] min-h-[750px]">
-               <iframe 
-                key={iframeKey}
-                src={`/api/assets/route_with_traffic.html?t=${iframeKey}`} 
-                className="w-full h-full border-0 bg-slate-50 block"
-               />
-            </Card>
+            <div className="xl:col-span-2 space-y-8">
+              <Card title="Predictive Traffic Heatmap" icon={TrafficCone} noPadding className="h-[75vh] min-h-[600px]">
+                 <iframe 
+                  key={iframeKey}
+                  src={`/api/assets/route_with_traffic.html?t=${iframeKey}`} 
+                  className="w-full h-full border-0 bg-slate-50 block"
+                 />
+              </Card>
+              
+              <Card title="Traffic Impact Analytics" icon={BarChart3}>
+                <img 
+                  key={iframeKey}
+                  src={`/api/assets/traffic_impact_comparison.png?t=${iframeKey}`}
+                  alt="Traffic Impact Comparison Chart"
+                  className="w-full rounded-xl shadow-lg border border-slate-100"
+                />
+              </Card>
+            </div>
+            
             <div className="space-y-8">
               <Card title="ML Predictive Insights" icon={BarChart3}>
                 <div className="p-4 bg-orange-50 rounded-2xl mb-4 ring-1 ring-orange-100">
@@ -482,13 +507,25 @@ export default function SmartRouteDashboard() {
 
         {activeTab === 'delivery' && (
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-            <Card title="Advanced Metaheuristic Logistics" icon={Package} noPadding className="xl:col-span-2 h-[85vh] min-h-[750px]">
-               <iframe 
-                key={iframeKey}
-                src={`/api/assets/delivery_route.html?t=${iframeKey}`} 
-                className="w-full h-full border-0 bg-slate-50 block"
-               />
-            </Card>
+            <div className="xl:col-span-2 space-y-8">
+              <Card title="Advanced Metaheuristic Logistics" icon={Package} noPadding className="h-[75vh] min-h-[600px]">
+                 <iframe 
+                  key={iframeKey}
+                  src={`/api/assets/delivery_route.html?t=${iframeKey}`} 
+                  className="w-full h-full border-0 bg-slate-50 block"
+                 />
+              </Card>
+              
+              <Card title="Route Optimization Analysis" icon={BarChart3}>
+                <img 
+                  key={iframeKey}
+                  src={`/api/assets/delivery_summary.png?t=${iframeKey}`}
+                  alt="Delivery Optimization Summary Chart"
+                  className="w-full rounded-xl shadow-lg border border-slate-100"
+                />
+              </Card>
+            </div>
+            
             <div className="space-y-8">
               <Card title="Metaheuristic Summary" icon={BarChart3}>
                 <div className="p-4 bg-emerald-50 rounded-2xl mb-4 ring-1 ring-emerald-100">
@@ -518,6 +555,41 @@ export default function SmartRouteDashboard() {
               </Card>
             </div>
           </div>
+        )}
+
+        {activeTab === 'report' && (
+          <Card title="Full Mission Evidence Folder" icon={FileText} className="h-[85vh] min-h-[750px]">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
+                {[
+                  { name: 'Algorithmic Delta', file: 'algorithm_comparison_no_traffic.png' },
+                  { name: 'Optimization Graph', file: 'delivery_summary.png' },
+                  { name: 'Traffic Delta', file: 'traffic_impact_comparison.png' }
+                ].map((item, i) => (
+                  <div key={i} className="group flex flex-col gap-2">
+                    <img 
+                       src={`/api/assets/${item.file}?t=${iframeKey}`}
+                       alt={item.name}
+                       className="rounded-xl shadow-md border hover:scale-[1.02] cursor-zoom-in transition-transform"
+                    />
+                    <div className="text-center font-bold text-slate-700 text-xs">{item.name}</div>
+                  </div>
+                ))}
+            </div>
+            <div className="mt-12 p-8 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+               <div className="flex items-center gap-4 mb-4">
+                  <div className="p-3 bg-white rounded-2xl shadow-sm">
+                    <Package className="w-6 h-6 text-blue-600" />
+                  </div>
+                  <div>
+                    <div className="text-xl font-black text-slate-800 tracking-tight">Mission Manifest Data</div>
+                    <div className="text-xs font-bold text-slate-400">RAW DATA JSON OUTPUT</div>
+                  </div>
+               </div>
+               <pre className="bg-slate-900 text-teal-400 p-6 rounded-2xl text-[10px] font-mono overflow-x-auto shadow-inner">
+                  {results ? JSON.stringify(results, null, 4) : '// Deployment pending...'}
+               </pre>
+            </div>
+          </Card>
         )}
       </main>
     </div>
