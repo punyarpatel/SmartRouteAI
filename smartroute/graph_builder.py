@@ -48,28 +48,33 @@ def load_graph(place_name=DEFAULT_PLACE, network_type=NETWORK_TYPE,
     cache_path = os.path.join(CACHE_DIR, f"{safe_name}_{network_type}.graphml")
 
     # ── Try loading from cache first ───────────────────────────
+    import sys
     if use_cache and os.path.exists(cache_path):
-        print(f"📂 Loading cached graph from: {cache_path}")
+        print(f"   [CACHE] Loading cached graph: {cache_path}", file=sys.stderr)
         start = time.time()
         G = ox.io.load_graphml(cache_path)
         elapsed = time.time() - start
-        print(f"   ✅ Loaded in {elapsed:.2f}s — "
-              f"{len(G.nodes):,} nodes, {len(G.edges):,} edges")
+        print(f"      ✅ OK - Loaded from cache in {elapsed:.2f}s — "
+              f"{len(G.nodes):,} nodes, {len(G.edges):,} edges", file=sys.stderr)
         return G
 
     # ── Download from OpenStreetMap ────────────────────────────
-    print(f"🌐 Downloading road network for: {place_name}")
-    print(f"   Network type: {network_type}")
+    print(f"   [OSM] Downloading road network for: '{place_name}'", file=sys.stderr)
+    print(f"      (This may take up to 2 minutes for large cities)", file=sys.stderr)
     start = time.time()
 
-    G = ox.graph.graph_from_place(place_name, network_type=network_type)
+    try:
+        G = ox.graph.graph_from_place(place_name, network_type=network_type)
+    except Exception as e:
+        print(f"\n      ❌ CRITICAL: OSMnx Download Failed for '{place_name}': {e}", file=sys.stderr)
+        print(f"      Tip: Double-check your city name and internet connection.", file=sys.stderr)
+        raise e
 
     download_time = time.time() - start
-    print(f"   ⬇️  Downloaded in {download_time:.2f}s")
+    print(f"      ✅ Downloaded from OSM in {download_time:.2f}s", file=sys.stderr)
 
     # ── Add speed and travel time to edges ─────────────────────
-    # OSMnx infers speeds from road type and adds travel_time (seconds)
-    print("   🔧 Computing edge speeds and travel times...")
+    print("      ⚡ Computing AI edge weights (traffic speeds)...", file=sys.stderr)
     G = ox.routing.add_edge_speeds(G)
     G = ox.routing.add_edge_travel_times(G)
 
@@ -79,12 +84,11 @@ def load_graph(place_name=DEFAULT_PLACE, network_type=NETWORK_TYPE,
 
     # ── Cache to disk ──────────────────────────────────────────
     if use_cache:
-        print(f"   💾 Saving to cache: {cache_path}")
+        print(f"      💾 Saving mission map to cache...", file=sys.stderr)
         ox.io.save_graphml(G, cache_path)
 
     elapsed = time.time() - start
-    print(f"   ✅ Graph ready in {elapsed:.2f}s — "
-          f"{len(G.nodes):,} nodes, {len(G.edges):,} edges")
+    print(f"   🏙️ OK - Full Graph Ready in {elapsed:.2f}s", file=sys.stderr)
     return G
 
 
@@ -95,23 +99,13 @@ def load_graph(place_name=DEFAULT_PLACE, network_type=NETWORK_TYPE,
 def get_nearest_node(G, lat, lon):
     """
     Find the graph node closest to the given GPS coordinates.
-
-    Uses OSMnx's fast ball-tree spatial index to snap a (lat, lon)
-    coordinate to the nearest intersection in the road network.
-
-    Args:
-        G   (nx.MultiDiGraph): The road network graph
-        lat (float): Latitude in decimal degrees
-        lon (float): Longitude in decimal degrees
-
-    Returns:
-        node_id (int): The OSM node ID of the nearest intersection
-
-    Example:
-        >>> node = get_nearest_node(G, 40.7580, -73.9855)
-        >>> print(f"Nearest node: {node}")
+    Ensures the graph has a valid CRS before lookup.
     """
-    return ox.distance.nearest_nodes(G, lon, lat)  # Note: OSMnx takes (X, Y) = (lon, lat)
+    # Ensure graph has CRS metadata (default to WGS84 if missing)
+    if not hasattr(G, 'crs'):
+        G.graph['crs'] = 'epsg:4326'
+    
+    return ox.distance.nearest_nodes(G, lon, lat)
 
 
 def get_node_coords(G, node_id):
@@ -164,12 +158,12 @@ def print_graph_stats(G):
     """Print a formatted summary of graph statistics."""
     stats = get_graph_stats(G)
     print("\n" + "=" * 55)
-    print("📊  ROAD NETWORK STATISTICS")
+    print("   ROAD NETWORK STATISTICS")
     print("=" * 55)
-    print(f"   🔵 Intersections (nodes):    {stats['nodes']:>8,}")
-    print(f"   🔗 Road segments (edges):    {stats['edges']:>8,}")
-    print(f"   📏 Total road length:        {stats['total_length_km']:>8.1f} km")
-    print(f"   📐 Avg segment length:       {stats['avg_edge_length_m']:>8.1f} m")
-    print(f"   🔄 Strongly connected:       {'Yes ✅' if stats['strongly_connected'] else 'No ❌'}")
+    print(f"      Intersections (nodes):    {stats['nodes']:>8,}")
+    print(f"      Road segments (edges):    {stats['edges']:>8,}")
+    print(f"      Total road length:        {stats['total_length_km']:>8.1f} km")
+    print(f"      Avg segment length:       {stats['avg_edge_length_m']:>8.1f} m")
+    print(f"      Strongly connected:       {'Yes' if stats['strongly_connected'] else 'No'}")
     print("=" * 55 + "\n")
     return stats

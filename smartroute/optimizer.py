@@ -55,7 +55,7 @@ def compute_distance_matrix(G, node_ids, weight="travel_time"):
             if i == j:
                 continue
             try:
-                _, cost, _ = astar(G, node_ids[i], node_ids[j], weight)
+                _, cost, _, _ = astar(G, node_ids[i], node_ids[j], weight)
                 matrix[i][j] = cost
             except ValueError:
                 # No path exists — use very large cost
@@ -130,7 +130,14 @@ def greedy_nearest_neighbor(distance_matrix):
     total_cost += distance_matrix[current][0]
     order.append(0)
 
-    print(f"   ✅ Greedy order: {order}")
+    # 🛡️ Sequence Integrity Check
+    if len(visited) < n:
+        unvisited = [j for j in range(n) if j not in visited]
+        print(f"   ⚠️ WARNING: Optimizer could not reach {len(unvisited)} stops (Node Indices: {unvisited})")
+        print("      Ensure all stops are on connected road segments.")
+    else:
+        print(f"   ✅ All {n-1} delivery targets successfully sequenced.")
+
     print(f"   📊 Greedy total cost: {total_cost:.2f}")
 
     return order, total_cost
@@ -172,8 +179,13 @@ def two_opt_improve(distance_matrix, initial_order, max_iterations=1000):
     route = list(initial_order[1:-1])  # Remove start/end warehouse
     n = len(route)
 
+    if n < 2:
+        return initial_order, initial_order_cost(distance_matrix, initial_order)
+
     def route_cost(r):
         """Calculate total cost of a route (including warehouse start/end)."""
+        if not r:
+            return 0
         cost = distance_matrix[0][r[0]]  # Warehouse → first stop
         for i in range(len(r) - 1):
             cost += distance_matrix[r[i]][r[i + 1]]
@@ -257,7 +269,7 @@ def build_full_route(G, node_ids, visit_order, weight="travel_time"):
         source_node = node_ids[source_idx]
         target_node = node_ids[target_idx]
 
-        path, cost, _ = astar(G, source_node, target_node, weight)
+        path, cost, _, _ = astar(G, source_node, target_node, weight)
 
         segment_paths.append(path)
         segment_costs.append(cost)
@@ -305,10 +317,19 @@ def optimize_delivery_route(G, node_ids, weight="travel_time"):
             - 'segment_costs':   Individual segment costs
             - 'distance_matrix': Pairwise cost matrix
     """
-    print("\n" + "=" * 55)
-    print("📦  MULTI-STOP DELIVERY OPTIMIZATION")
-    print("=" * 55)
-    print(f"   📍 Warehouse + {len(node_ids) - 1} delivery stops")
+    # Step 0: Check for enough locations to optimize
+    if len(node_ids) < 2:
+        print("   ⚠️  Insufficient locations for multi-stop optimization. Skipping.")
+        return {
+            "greedy_order": [0, 0] if len(node_ids) == 1 else [],
+            "greedy_cost": 0,
+            "optimized_order": [0, 0] if len(node_ids) == 1 else [],
+            "optimized_cost": 0,
+            "full_path": [],
+            "segment_paths": [],
+            "segment_costs": [],
+            "distance_matrix": np.zeros((len(node_ids), len(node_ids))),
+        }
 
     # Step 1: Distance matrix
     dist_matrix = compute_distance_matrix(G, node_ids, weight)

@@ -11,6 +11,7 @@ All output files are saved to the 'output/' directory.
 import os
 
 import folium
+from folium.plugins import AntPath
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -23,55 +24,72 @@ from smartroute.config import COLORS, MAP_TILES, OUTPUT_DIR
 # ══════════════════════════════════════════════════════════════
 
 def plot_route_interactive(G, route_astar, route_dijkstra=None,
+                           visited_astar=None, visited_dijkstra=None,
                            source_node=None, target_node=None,
                            source_name=None, target_name=None,
+                           extra_stops=None, extra_stop_names=None,
                            metrics=None, filename="route_map.html"):
     """
-    Create an interactive HTML map showing the computed route(s).
-
-    Displays the A* route (and optionally Dijkstra route) overlaid
-    on an OpenStreetMap base map. Click markers for info.
-
-    Args:
-        G               (nx.MultiDiGraph): Road network graph
-        route_astar     (list[int]): A* path (list of node IDs)
-        route_dijkstra  (list[int]): Optional Dijkstra path for comparison
-        source_node     (int): Start node ID (for marker)
-        target_node     (int): End node ID (for marker)
-        filename        (str): Output filename
-
-    Returns:
-        str: Path to saved HTML file
+    Create an interactive HTML map showing the computed route(s) and search space.
     """
-    print(f"\n🗺️  Generating interactive route map...")
+    print(f"\n[MAP] Generating interactive route map...")
 
-    # ── Create base map centered on the route ───────────────
     route_coords = _nodes_to_coords(G, route_astar)
     center_lat = np.mean([c[0] for c in route_coords])
     center_lon = np.mean([c[1] for c in route_coords])
 
     m = folium.Map(location=[center_lat, center_lon],
-                   zoom_start=14, tiles=MAP_TILES)
+                   zoom_start=14, tiles=MAP_TILES, 
+                   width='100%', height='100%')
 
-    # ── Plot Dijkstra route (if provided, drawn first = behind) ──
+    # ── Visualize Search Space (Frontier) ───────────────────
+    if visited_dijkstra:
+        for node in visited_dijkstra:
+            lat, lon = G.nodes[node]["y"], G.nodes[node]["x"]
+            folium.CircleMarker(
+                location=[lat, lon],
+                radius=1,
+                color=COLORS["route_dijkstra"],
+                fill=True,
+                opacity=0.2,
+                fill_opacity=0.1,
+                tooltip="Dijkstra Search Frontier"
+            ).add_to(m)
+
+    if visited_astar:
+        for node in visited_astar:
+            lat, lon = G.nodes[node]["y"], G.nodes[node]["x"]
+            folium.CircleMarker(
+                location=[lat, lon],
+                radius=1,
+                color=COLORS["route_astar"],
+                fill=True,
+                opacity=0.3,
+                fill_opacity=0.2,
+                tooltip="A* Search Frontier"
+            ).add_to(m)
+
+    # ── Plot Dijkstra route ──
     if route_dijkstra:
         dijkstra_coords = _nodes_to_coords(G, route_dijkstra)
         folium.PolyLine(
             locations=dijkstra_coords,
             color=COLORS["route_dijkstra"],
-            weight=10,
-            opacity=0.8,
-            dash_array="10 10",
+            weight=8,
+            opacity=0.6,
+            dash_array="5 5",
             tooltip="Dijkstra Path",
         ).add_to(m)
 
-    # ── Plot A* route ───────────────────────────────────────
-    folium.PolyLine(
+    # ── Plot A* route with Animation ──────────────────────────
+    AntPath(
         locations=route_coords,
         color=COLORS["route_astar"],
-        weight=4,
+        weight=6,
         opacity=1.0,
-        tooltip="A* Path",
+        delay=1000,
+        pulse_color="#FFF",
+        tooltip="A* Traversal Path (Animated)",
     ).add_to(m)
 
     # ── Add start/end markers ───────────────────────────────
@@ -80,8 +98,7 @@ def plot_route_interactive(G, route_astar, route_dijkstra=None,
         s_text = source_name if source_name else "Start Point"
         folium.Marker(
             location=[s_lat, s_lon],
-            popup=f"<b>{s_text}</b><br>Start Node",
-            tooltip=s_text,
+            popup=f"<b>{s_text}</b>",
             icon=folium.Icon(color="green", icon="play", prefix="fa"),
         ).add_to(m)
 
@@ -90,29 +107,32 @@ def plot_route_interactive(G, route_astar, route_dijkstra=None,
         t_text = target_name if target_name else "Destination"
         folium.Marker(
             location=[t_lat, t_lon],
-            popup=f"<b>{t_text}</b><br>Destination Node",
-            tooltip=t_text,
+            popup=f"<b>{t_text}</b>",
             icon=folium.Icon(color="red", icon="flag-checkered", prefix="fa"),
         ).add_to(m)
 
-    legend_html = _build_legend({
-        "A* Route": COLORS["route_astar"],
-        **({"Dijkstra Route": COLORS["route_dijkstra"]} if route_dijkstra else {}),
-    })
-    m.get_root().html.add_child(folium.Element(legend_html))
-    
+    # ── Add extra stops (the rest of the mission) ──
+    if extra_stops:
+        for i, node in enumerate(extra_stops):
+            if node == source_node or node == target_node:
+                continue
+            e_lat, e_lon = G.nodes[node]["y"], G.nodes[node]["x"]
+            e_text = extra_stop_names[i] if extra_stop_names else f"Stop {i}"
+            folium.Marker(
+                location=[e_lat, e_lon],
+                popup=f"<b>{e_text}</b><br>Mission Target",
+                icon=folium.Icon(color="blue", icon="box", prefix="fa"),
+            ).add_to(m)
+
     if metrics:
         panel_html = _build_metrics_panel(metrics, type="single")
         m.get_root().html.add_child(folium.Element(panel_html))
 
-    # ── Auto-zoom to fit route ──────────────────────────────
     m.fit_bounds([[min(c[0] for c in route_coords), min(c[1] for c in route_coords)],
                   [max(c[0] for c in route_coords), max(c[1] for c in route_coords)]])
 
-    # ── Save ────────────────────────────────────────────────
     filepath = os.path.join(OUTPUT_DIR, filename)
     m.save(filepath)
-    print(f"   ✅ Saved: {filepath}")
     return filepath
 
 
@@ -134,7 +154,7 @@ def plot_multi_stop_route(G, segment_paths, stop_nodes, stop_names=None,
     Returns:
         str: Path to saved HTML file
     """
-    print(f"\n🗺️  Generating multi-stop delivery map...")
+    print(f"\n[MAP] Generating multi-stop delivery map...")
 
     # ── Collect all coordinates for centering ───────────────
     all_coords = []
@@ -145,21 +165,24 @@ def plot_multi_stop_route(G, segment_paths, stop_nodes, stop_names=None,
     center_lon = np.mean([c[1] for c in all_coords])
 
     m = folium.Map(location=[center_lat, center_lon],
-                   zoom_start=13, tiles=MAP_TILES)
+                   zoom_start=13, tiles=MAP_TILES,
+                   width='100%', height='100%')
 
     segment_colors = COLORS["route_segments"]
 
-    # ── Draw each route segment ─────────────────────────────
+    # ── Draw each route segment with Animation ──────────────
     for i, seg_path in enumerate(segment_paths):
         coords = _nodes_to_coords(G, seg_path)
         color = segment_colors[i % len(segment_colors)]
 
-        folium.PolyLine(
+        AntPath(
             locations=coords,
             color=color,
-            weight=5,
-            opacity=0.8,
-            tooltip=f"Segment {i + 1}",
+            weight=6,
+            opacity=1.0,
+            delay=1500,
+            pulse_color="#FFF",
+            tooltip=f"Delivery Leg {i + 1}",
         ).add_to(m)
 
     # Add numbered stop markers
@@ -216,7 +239,7 @@ def plot_multi_stop_route(G, segment_paths, stop_nodes, stop_names=None,
 
     filepath = os.path.join(OUTPUT_DIR, filename)
     m.save(filepath)
-    print(f"   ✅ Saved: {filepath}")
+    print(f"   OK - Saved: {filepath}")
     return filepath
 
 
@@ -240,7 +263,7 @@ def plot_algorithm_comparison(comparison, filename="comparison.png"):
     Returns:
         str: Path to saved image
     """
-    print(f"\n📊 Generating algorithm comparison chart...")
+    print(f"\n[CHART] Generating algorithm comparison chart...")
 
     d_metrics = comparison["dijkstra"][2]
     a_metrics = comparison["astar"][2]
@@ -305,7 +328,7 @@ def plot_algorithm_comparison(comparison, filename="comparison.png"):
     fig.savefig(filepath, dpi=150, bbox_inches="tight",
                 facecolor="white", edgecolor="none")
     plt.close(fig)
-    print(f"   ✅ Saved: {filepath}")
+    print(f"   OK - Saved: {filepath}")
     return filepath
 
 
@@ -322,7 +345,7 @@ def plot_traffic_comparison(comparison_no_traffic, comparison_with_traffic,
     Returns:
         str: Path to saved image
     """
-    print(f"\n📊 Generating traffic impact chart...")
+    print(f"\n[CHART] Generating traffic impact chart...")
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     fig.suptitle("Impact of Traffic on Route Performance",
@@ -393,7 +416,7 @@ def plot_traffic_comparison(comparison_no_traffic, comparison_with_traffic,
     fig.savefig(filepath, dpi=150, bbox_inches="tight",
                 facecolor="white", edgecolor="none")
     plt.close(fig)
-    print(f"   ✅ Saved: {filepath}")
+    print(f"   OK - Saved: {filepath}")
     return filepath
 
 
@@ -414,7 +437,7 @@ def plot_delivery_summary(optimization_result, stop_names=None,
     Returns:
         str: Path to saved image
     """
-    print(f"\n📊 Generating delivery summary chart...")
+    print(f"\n[CHART] Generating delivery summary chart...")
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
     fig.suptitle("Multi-Stop Delivery Optimization Results",
@@ -494,7 +517,7 @@ def plot_delivery_summary(optimization_result, stop_names=None,
     fig.savefig(filepath, dpi=150, bbox_inches="tight",
                 facecolor="white", edgecolor="none")
     plt.close(fig)
-    print(f"   ✅ Saved: {filepath}")
+    print(f"   OK - Saved: {filepath}")
     return filepath
 
 

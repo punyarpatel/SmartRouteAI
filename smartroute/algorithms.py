@@ -69,70 +69,26 @@ def dijkstra(G, source, target, weight="travel_time"):
     """
     Find the shortest path using Dijkstra's algorithm.
 
-    Dijkstra explores nodes in order of increasing distance from
-    the source. It guarantees the optimal path but explores many
-    unnecessary nodes because it has no sense of direction.
-
-    How it works:
-    1. Start at source with cost 0
-    2. Use a priority queue (min-heap) ordered by path cost
-    3. Pop the cheapest node, explore all its neighbors
-    4. If a cheaper path to a neighbor is found, update it
-    5. Stop when the target is popped from the queue
-
-    Args:
-        G      (nx.MultiDiGraph): Road network graph
-        source (int): Starting node ID
-        target (int): Destination node ID
-        weight (str): Edge attribute to use as cost ("travel_time" or "length")
-
     Returns:
-        tuple: (path, cost, metrics)
-            - path    (list[int]): Sequence of node IDs from source to target
-            - cost    (float):     Total path cost
-            - metrics (dict):      Performance metrics:
-                - 'algorithm':      "Dijkstra"
-                - 'execution_time': Time in seconds
-                - 'nodes_explored': Number of nodes popped from queue
-                - 'path_length':    Number of nodes in path
-                - 'path_cost':      Total edge weight sum
-
-    Raises:
-        ValueError: If no path exists between source and target
+        tuple: (path, cost, metrics, visited_nodes)
     """
     start_time = time.time()
-
-    # ── Data structures ─────────────────────────────────────
-    # dist[node] = best known cost from source to node
     dist = {source: 0}
-
-    # prev[node] = predecessor node on the best path
     prev = {}
-
-    # Priority queue: (cost, node_id)
-    # We use a counter to break ties deterministically
     pq = [(0, source)]
-
-    # Track which nodes have been finalized (popped from queue)
     visited = set()
     nodes_explored = 0
 
-    # ── Main loop ───────────────────────────────────────────
     while pq:
         current_cost, current_node = heapq.heappop(pq)
-
-        # Skip if we've already found a better path to this node
         if current_node in visited:
             continue
-
         visited.add(current_node)
         nodes_explored += 1
 
-        # ── Found the target! Reconstruct path ──────────────
         if current_node == target:
             path = _reconstruct_path(prev, source, target)
             elapsed = time.time() - start_time
-
             metrics = {
                 "algorithm": "Dijkstra",
                 "execution_time": round(elapsed, 6),
@@ -140,193 +96,109 @@ def dijkstra(G, source, target, weight="travel_time"):
                 "path_length": len(path),
                 "path_cost": round(current_cost, 4),
             }
-            return path, current_cost, metrics
+            return path, current_cost, metrics, list(visited)
 
-        # ── Explore neighbors ───────────────────────────────
-        # G[current_node] returns a dict of {neighbor: {key: edge_data}}
         for neighbor in G[current_node]:
             if neighbor in visited:
                 continue
-
-            # Get the minimum-weight edge between current and neighbor
-            # (MultiDiGraph can have parallel edges)
             edge_cost = _get_min_edge_weight(G, current_node, neighbor, weight)
             new_cost = current_cost + edge_cost
-
-            # If this path is better, update
             if new_cost < dist.get(neighbor, float("inf")):
                 dist[neighbor] = new_cost
                 prev[neighbor] = current_node
                 heapq.heappush(pq, (new_cost, neighbor))
 
-    # No path found
-    raise ValueError(
-        f"No path exists from node {source} to node {target}"
-    )
+    raise ValueError(f"No path exists from node {source} to node {target}")
 
 
-# ──────────────────────────────────────────────────────────────
-# A* ALGORITHM (Optimized with Heuristic)
-# ──────────────────────────────────────────────────────────────
-
-def astar(G, source, target, weight="travel_time"):
+def astar(G, source, target, weight="travel_time", h_weight=1.0):
     """
-    Find the shortest path using the A* algorithm with Haversine heuristic.
-
-    A* is an informed search algorithm that uses a heuristic to guide
-    exploration toward the target. It explores far fewer nodes than
-    Dijkstra while still guaranteeing the optimal path.
-
-    How it works:
-    1. f(n) = g(n) + h(n)
-       - g(n) = actual cost from source to node n
-       - h(n) = estimated cost from n to target (Haversine distance)
-       - f(n) = estimated total cost through node n
-    2. Priority queue ordered by f(n) instead of just g(n)
-    3. The heuristic "pulls" exploration toward the target
-
-    The Haversine heuristic is ADMISSIBLE (never overestimates) because
-    the straight-line distance is always ≤ the actual road distance.
+    Find the shortest path using A* with a weighted Haversine heuristic.
 
     Args:
-        G      (nx.MultiDiGraph): Road network graph
-        source (int): Starting node ID
-        target (int): Destination node ID
-        weight (str): Edge attribute to use as cost
+        h_weight (float): Heuristic multiplier. 1.0=Standard A*, 0.0=Dijkstra, >1.0=Greedy.
 
     Returns:
-        tuple: (path, cost, metrics) — same format as dijkstra()
+        tuple: (path, cost, metrics, visited_nodes)
     """
     start_time = time.time()
-
-    # Get target coordinates for the heuristic
     target_lat = G.nodes[target]["y"]
     target_lon = G.nodes[target]["x"]
 
-    # ── Determine heuristic scaling ─────────────────────────
-    # If weight is "travel_time", we need to convert distance (meters)
-    # to an estimated time. We use max road speed to ensure admissibility.
     if weight == "travel_time":
-        # Assume max possible speed = 130 km/h = 36.11 m/s
-        # This ensures h(n) never overestimates travel time
-        max_speed_mps = 130 / 3.6  # km/h to m/s
+        max_speed_mps = 130 / 3.6
         heuristic_scale = 1.0 / max_speed_mps
     else:
-        # For distance-based weight, haversine gives meters directly
         heuristic_scale = 1.0
 
-    # ── Data structures ─────────────────────────────────────
-    g_score = {source: 0}   # Best known cost from source
-    prev = {}               # Predecessor map
-
-    # Compute initial heuristic
+    g_score = {source: 0}
+    prev = {}
     source_lat = G.nodes[source]["y"]
     source_lon = G.nodes[source]["x"]
-    h_source = haversine_distance(source_lat, source_lon,
-                                  target_lat, target_lon) * heuristic_scale
-
-    # Priority queue: (f_score, g_score, node_id)
-    # Including g_score as tiebreaker favors nodes closer to source
+    h_source = haversine_distance(source_lat, source_lon, target_lat, target_lon) * heuristic_scale * h_weight
     pq = [(h_source, 0, source)]
-
     visited = set()
     nodes_explored = 0
 
-    # ── Main loop ───────────────────────────────────────────
     while pq:
         f_score, current_g, current_node = heapq.heappop(pq)
-
         if current_node in visited:
             continue
-
         visited.add(current_node)
         nodes_explored += 1
 
-        # ── Found the target! ───────────────────────────────
         if current_node == target:
             path = _reconstruct_path(prev, source, target)
             elapsed = time.time() - start_time
-
             metrics = {
                 "algorithm": "A*",
                 "execution_time": round(elapsed, 6),
                 "nodes_explored": nodes_explored,
                 "path_length": len(path),
                 "path_cost": round(current_g, 4),
+                "h_weight": h_weight
             }
-            return path, current_g, metrics
+            return path, current_g, metrics, list(visited)
 
-        # ── Explore neighbors ───────────────────────────────
         for neighbor in G[current_node]:
             if neighbor in visited:
                 continue
-
             edge_cost = _get_min_edge_weight(G, current_node, neighbor, weight)
             tentative_g = current_g + edge_cost
-
             if tentative_g < g_score.get(neighbor, float("inf")):
                 g_score[neighbor] = tentative_g
                 prev[neighbor] = current_node
-
-                # Compute heuristic for neighbor
                 n_lat = G.nodes[neighbor]["y"]
                 n_lon = G.nodes[neighbor]["x"]
-                h = haversine_distance(n_lat, n_lon,
-                                       target_lat, target_lon) * heuristic_scale
-
+                h = haversine_distance(n_lat, n_lon, target_lat, target_lon) * heuristic_scale * h_weight
                 f = tentative_g + h
                 heapq.heappush(pq, (f, tentative_g, neighbor))
 
-    raise ValueError(
-        f"No path exists from node {source} to node {target}"
-    )
+    raise ValueError(f"No path exists from node {source} to node {target}")
 
 
 # ──────────────────────────────────────────────────────────────
 # ALGORITHM COMPARISON
 # ──────────────────────────────────────────────────────────────
 
-def compare_algorithms(G, source, target, weight="travel_time"):
+def compare_algorithms(G, source, target, weight="travel_time", h_weight=1.0):
     """
-    Run both Dijkstra and A* on the same source→target pair
-    and return a side-by-side comparison of their performance.
-
-    Args:
-        G      (nx.MultiDiGraph): Road network graph
-        source (int): Starting node ID
-        target (int): Destination node ID
-        weight (str): Edge attribute for cost
-
-    Returns:
-        dict with keys:
-            - 'dijkstra': (path, cost, metrics)
-            - 'astar':    (path, cost, metrics)
+    Run both Dijkstra and A* on the same source→target pair.
     """
     print(f"\n🔍 Running algorithm comparison: {source} → {target}")
-    print(f"   Weight attribute: {weight}")
 
     # Run Dijkstra
-    d_path, d_cost, d_metrics = dijkstra(G, source, target, weight)
-    print(f"   📊 Dijkstra: {d_metrics['nodes_explored']:,} nodes explored, "
-          f"{d_metrics['execution_time']:.4f}s")
-
+    d_path, d_cost, d_metrics, d_visited = dijkstra(G, source, target, weight)
+    
     # Run A*
-    a_path, a_cost, a_metrics = astar(G, source, target, weight)
-    print(f"   📊 A*:       {a_metrics['nodes_explored']:,} nodes explored, "
-          f"{a_metrics['execution_time']:.4f}s")
+    a_path, a_cost, a_metrics, a_visited = astar(G, source, target, weight, h_weight)
 
-    # Compute improvement
-    node_reduction = (1 - a_metrics["nodes_explored"] /
-                      max(d_metrics["nodes_explored"], 1)) * 100
-    time_reduction = (1 - a_metrics["execution_time"] /
-                      max(d_metrics["execution_time"], 1e-9)) * 100
-
-    print(f"   ⚡ A* explored {node_reduction:.1f}% fewer nodes")
-    print(f"   ⚡ A* was {time_reduction:.1f}% faster")
-
+    node_reduction = (1 - a_metrics["nodes_explored"] / max(d_metrics["nodes_explored"], 1)) * 100
+    time_reduction = (1 - a_metrics["execution_time"] / max(d_metrics["execution_time"], 1e-9)) * 100
+    
     return {
-        "dijkstra": (d_path, d_cost, d_metrics),
-        "astar": (a_path, a_cost, a_metrics),
+        "dijkstra": (d_path, d_cost, d_metrics, d_visited),
+        "astar": (a_path, a_cost, a_metrics, a_visited),
         "node_reduction_pct": round(node_reduction, 2),
         "time_reduction_pct": round(time_reduction, 2),
     }
@@ -387,29 +259,17 @@ def _reconstruct_path(prev, source, target):
     return path
 
 
+# Pre-defined lambda for speed
+_weight_getter = lambda data_dict, w: float(data_dict.get(w, float("inf"))) if not isinstance(data_dict.get(w), list) else float(data_dict.get(w)[0])
+
 def _get_min_edge_weight(G, u, v, weight):
     """
     Get the minimum edge weight between two nodes in a MultiDiGraph.
-
-    Since OSM road networks can have parallel edges (e.g., multiple
-    lanes), we pick the edge with the smallest weight value.
-
-    Args:
-        G      (nx.MultiDiGraph): Road network
-        u, v   (int): Source and target node IDs
-        weight (str): Edge attribute name
-
-    Returns:
-        float: Minimum weight value among all edges u→v
+    Optimized for lookup speed.
     """
-    def get_float_weight(data_dict, w):
-        val = data_dict.get(w, float("inf"))
-        try:
-            return float(val)
-        except (ValueError, TypeError):
-            if isinstance(val, list) and val:
-                return float(val[0])
-            return float("inf")
-
-    edges = G[u][v]  # Dict of {key: edge_data}
-    return min(get_float_weight(data, weight) for data in edges.values())
+    edges = G[u][v]
+    if len(edges) == 1:
+        # Fast path for single-edge roads (most common)
+        return _weight_getter(next(iter(edges.values())), weight)
+    
+    return min(_weight_getter(data, weight) for data in edges.values())
