@@ -111,6 +111,44 @@ def dijkstra(G, source, target, weight="travel_time"):
     raise ValueError(f"No path exists from node {source} to node {target}")
 
 
+def dijkstra_single_source(G, source, weight="travel_time"):
+    """
+    Find shortest distances from a single source to all reachable nodes.
+    
+    This is highly efficient for building distance matrices because it 
+    explores the graph once per source node, rather than once per pair.
+
+    Args:
+        G (nx.MultiDiGraph): Road network graph
+        source (int): Starting node ID
+        weight (str): Edge attribute for cost
+
+    Returns:
+        dict: Mapping of node_id -> min_cost
+    """
+    heapq_list = [(0, source)]
+    distances = {source: 0}
+    visited = set()
+
+    while heapq_list:
+        current_dist, current_node = heapq.heappop(heapq_list)
+        
+        if current_node in visited:
+            continue
+        visited.add(current_node)
+
+        for neighbor in G[current_node]:
+            # Use the optimized weight getter
+            edge_cost = _get_min_edge_weight(G, current_node, neighbor, weight)
+            new_dist = current_dist + edge_cost
+            
+            if new_dist < distances.get(neighbor, float("inf")):
+                distances[neighbor] = new_dist
+                heapq.heappush(heapq_list, (new_dist, neighbor))
+                
+    return distances
+
+
 def astar(G, source, target, weight="travel_time", h_weight=1.0):
     """
     Find the shortest path using A* with a weighted Haversine heuristic.

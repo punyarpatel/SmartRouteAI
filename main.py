@@ -35,7 +35,8 @@ try:
     from smartroute.algorithms import compare_algorithms
     from smartroute.optimizer import optimize_delivery_route
     from smartroute.visualizer import (
-        plot_route_interactive, plot_multi_stop_route
+        plot_route_interactive, plot_multi_stop_route,
+        plot_algorithm_comparison, plot_traffic_comparison, plot_delivery_summary
     )
     print("   🚀 All AI Systems Go.", file=sys.stderr)
     
@@ -48,17 +49,47 @@ except Exception as e:
     traceback.print_exc(file=sys.stderr)
     sys.exit(1)
 
+# 🏁 Geocode Cache to prevent redundant OSN lookups
+GEO_CACHE_FILE = os.path.join(os.path.dirname(__file__), "cache", "geocode_cache.json")
+_geocode_cache = {}
+
+def _load_geocode_cache():
+    global _geocode_cache
+    if os.path.exists(GEO_CACHE_FILE):
+        try:
+            with open(GEO_CACHE_FILE, 'r', encoding='utf-8') as f:
+                _geocode_cache = json.load(f)
+        except Exception:
+            _geocode_cache = {}
+
+def _save_geocode_cache():
+    os.makedirs(os.path.dirname(GEO_CACHE_FILE), exist_ok=True)
+    try:
+        with open(GEO_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_geocode_cache, f, indent=4)
+    except Exception:
+        pass
+
+_load_geocode_cache()
+
 def resolve_coords(location):
     """Geocodes location if coords are missing."""
     if "lat" in location and "lon" in location:
         return float(location["lat"]), float(location["lon"])
     
+    address = location["address"]
+    if address in _geocode_cache:
+        # ⚡ Cache Hit!
+        return tuple(_geocode_cache[address])
+    
     print(f"   [GEO] Geocoding '{location.get('name', 'Unknown')}'...", file=sys.stderr)
     try:
-        lat, lon = ox.geocode(location["address"])
+        lat, lon = ox.geocode(address)
+        _geocode_cache[address] = [lat, lon]
+        _save_geocode_cache()
         return lat, lon
     except Exception as e:
-        print(f"      [ERROR] CRITICAL: Failed to resolve address '{location.get('address')}': {e}", file=sys.stderr)
+        print(f"      [ERROR] CRITICAL: Failed to resolve address '{address}': {e}", file=sys.stderr)
         return None
 
 def main():
@@ -159,29 +190,40 @@ def main():
     hour = int(mission.get("hour", 12))
     sim_incident = mission.get("sim_incident", False)
 
-    # 🚀 Batch Extraction for Speed (Vectorization)
-    edges_to_predict = []
-    keys = []
-    for u, v, k, data in G.edges(data=True, keys=True):
-        road_type = data.get("highway", "residential")
-        if isinstance(road_type, list): road_type = road_type[0]
-        length = float(data.get('length', 0))
-        edges_to_predict.append((hour, road_type, length))
-        keys.append((u, v, k))
-
-    # Single call for the whole city! 🏎️
-    delays = predictor.predict_batch(edges_to_predict)
-
-    for i, (u, v, k) in enumerate(keys):
+    # 🚀 Vectorized Extraction for Speed
+    # Instead of looping through thousands of edges in pure Python, we use Pandas
+    edges_df = ox.graph_to_gdfs(G, nodes=False, fill_edge_geometry=False)
+    
+    # Pre-process road types and lengths in bulk
+    edges_df['road_type'] = edges_df['highway'].apply(lambda x: x[0] if isinstance(x, list) else x)
+    edges_df['hour'] = hour
+    
+    features = edges_df[['hour', 'road_type', 'length']].values.tolist()
+    delays = predictor.predict_batch(features)
+    
+    # 🏎️ Vectorized Travel Time Update
+    for i, (u, v, k) in enumerate(edges_df.index):
         data = G.edges[u, v, k]
-        base_time = float(data.get('travel_time_original', data.get('travel_time', 0)))
-        data['travel_time'] = base_time + delays[i]
+        original = float(data.get('travel_time_original', data.get('travel_time', 0)))
+        data['travel_time'] = original + delays[i]
         
-        # Incident simulation (Fast)
-        if sim_incident and random.random() < 0.05:
-            data['travel_time'] *= 10.0 
+        if sim_incident and random.random() < 0.03:
+            data['travel_time'] *= 10.0
 
-    print(f"   ⚡ ML Simulation completed for {len(keys):,} edges in {time.time() - sim_start:.3f}s")
+    # 4b. AI Performance Delta (With Traffic) ── [Dynamic Analysis]
+    comp_traffic = compare_algorithms(G, source, target, weight=DEFAULT_WEIGHT, h_weight=mission["h_weight"])
+    
+    # 🕵️ Generate Intelligence Assets (Fresh Charts)
+    plot_algorithm_comparison(comp, filename="algorithm_comparison_no_traffic.png")
+    plot_traffic_comparison(comp, comp_traffic, filename="traffic_impact_comparison.png")
+    
+    plot_route_interactive(
+        G, route_astar=comp_traffic["astar"][0], route_dijkstra=comp_traffic["dijkstra"][0], 
+        source_node=source, target_node=target, 
+        filename="route_with_traffic.html"
+    )
+
+    print(f"   ⚡ ML Simulation completed for {len(edges_df):,} edges in {time.time() - sim_start:.3f}s")
 
     # 5. Multi-Stop Sequence Optimization (TSP)
     opt_result = optimize_delivery_route(G, all_nodes, weight=DEFAULT_WEIGHT)
@@ -210,6 +252,9 @@ def main():
         }, 
         filename="delivery_route.html"
     )
+    
+    # 📊 Final Logistics Chart
+    plot_delivery_summary(opt_result, stop_names=[stop_names[i] for i in final_order], filename="delivery_summary.png")
 
     # 6. Save Results & Data Export
     experiment.save_to_csv()

@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 
-from smartroute.algorithms import astar
+from smartroute.algorithms import astar, dijkstra_single_source
 
 
 # ──────────────────────────────────────────────────────────────
@@ -51,16 +51,21 @@ def compute_distance_matrix(G, node_ids, weight="travel_time"):
     start = time.time()
 
     for i in range(n):
+        # 🚀 OPTIMIZATION: Compute distances to all nodes in one pass from node_ids[i]
+        # This replaces (n-1) separate A* searches with a single Dijkstra expansion.
+        source_node = node_ids[i]
+        all_distances = dijkstra_single_source(G, source_node, weight)
+        
         for j in range(n):
             if i == j:
                 continue
-            try:
-                _, cost, _, _ = astar(G, node_ids[i], node_ids[j], weight)
-                matrix[i][j] = cost
-            except ValueError:
-                # No path exists — use very large cost
-                matrix[i][j] = float("inf")
-                print(f"   ⚠️  No path from {node_ids[i]} to {node_ids[j]}")
+            
+            target_node = node_ids[j]
+            cost = all_distances.get(target_node, float("inf"))
+            matrix[i][j] = cost
+            
+            if cost == float("inf"):
+                 print(f"   ⚠️  No path from {source_node} to {target_node}")
 
     elapsed = time.time() - start
     print(f"   ✅ Distance matrix computed in {elapsed:.2f}s")

@@ -11,7 +11,7 @@ All output files are saved to the 'output/' directory.
 import os
 
 import folium
-from folium.plugins import AntPath
+from folium.plugins import AntPath, FastMarkerCluster
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -44,30 +44,41 @@ def plot_route_interactive(G, route_astar, route_dijkstra=None,
 
     # ── Visualize Search Space (Frontier) ───────────────────
     if visited_dijkstra:
-        for node in visited_dijkstra:
-            lat, lon = G.nodes[node]["y"], G.nodes[node]["x"]
-            folium.CircleMarker(
-                location=[lat, lon],
-                radius=1,
-                color=COLORS["route_dijkstra"],
-                fill=True,
-                opacity=0.2,
-                fill_opacity=0.1,
-                tooltip="Dijkstra Search Frontier"
-            ).add_to(m)
+        # 🚀 OPTIMIZATION: Use FastMarkerCluster for thousands of nodes
+        d_coords = [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in visited_dijkstra]
+        FastMarkerCluster(
+            data=d_coords,
+            name="Dijkstra Search Frontier",
+            callback='''
+                function (row) {
+                    return L.circleMarker(row, {
+                        radius: 1,
+                        color: "'''+COLORS["route_dijkstra"]+'''",
+                        fill: true,
+                        opacity: 0.2,
+                        fillOpacity: 0.1
+                    });
+                }
+            '''
+        ).add_to(m)
 
     if visited_astar:
-        for node in visited_astar:
-            lat, lon = G.nodes[node]["y"], G.nodes[node]["x"]
-            folium.CircleMarker(
-                location=[lat, lon],
-                radius=1,
-                color=COLORS["route_astar"],
-                fill=True,
-                opacity=0.3,
-                fill_opacity=0.2,
-                tooltip="A* Search Frontier"
-            ).add_to(m)
+        a_coords = [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in visited_astar]
+        FastMarkerCluster(
+            data=a_coords,
+            name="A* Search Frontier",
+            callback='''
+                function (row) {
+                    return L.circleMarker(row, {
+                        radius: 1,
+                        color: "'''+COLORS["route_astar"]+'''",
+                        fill: true,
+                        opacity: 0.3,
+                        fillOpacity: 0.2
+                    });
+                }
+            '''
+        ).add_to(m)
 
     # ── Plot Dijkstra route ──
     if route_dijkstra:
