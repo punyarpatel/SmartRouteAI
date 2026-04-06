@@ -22,39 +22,26 @@ from smartroute.config import EARTH_RADIUS_M
 # HEURISTIC FUNCTION
 # ──────────────────────────────────────────────────────────────
 
-def haversine_distance(lat1, lon1, lat2, lon2):
+def haversine_distance(lat1, lon1, lat2, lon2, target_rad=None):
     """
     Calculate the great-circle distance between two GPS points.
-
-    Uses the Haversine formula to compute the shortest distance
-    over the Earth's surface between two (lat, lon) coordinates.
-
-    This is used as the A* heuristic because:
-    - It is ADMISSIBLE: never overestimates the actual road distance
-      (straight-line distance ≤ road distance, always)
-    - It is CONSISTENT: satisfies the triangle inequality
-
-    Args:
-        lat1, lon1 (float): First point (decimal degrees)
-        lat2, lon2 (float): Second point (decimal degrees)
-
-    Returns:
-        float: Distance in meters
-
-    Example:
-        >>> haversine_distance(40.7580, -73.9855, 40.7484, -73.9857)
-        1066.8  # ~1 km between Times Square and Empire State Building
     """
-    # Convert degrees to radians
     phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
+    lam1 = math.radians(lon1)
+    
+    if target_rad:
+        phi2, lam2 = target_rad
+    else:
+        phi2 = math.radians(lat2)
+        lam2 = math.radians(lon2)
+
+    delta_phi = phi2 - phi1
+    delta_lam = lam2 - lam1
 
     # Haversine formula
     a = (math.sin(delta_phi / 2) ** 2 +
          math.cos(phi1) * math.cos(phi2) *
-         math.sin(delta_lambda / 2) ** 2)
+         math.sin(delta_lam / 2) ** 2)
 
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
@@ -162,6 +149,7 @@ def astar(G, source, target, weight="travel_time", h_weight=1.0):
     start_time = time.time()
     target_lat = G.nodes[target]["y"]
     target_lon = G.nodes[target]["x"]
+    target_rad = (math.radians(target_lat), math.radians(target_lon))
 
     if weight == "travel_time":
         max_speed_mps = 130 / 3.6
@@ -171,9 +159,8 @@ def astar(G, source, target, weight="travel_time", h_weight=1.0):
 
     g_score = {source: 0}
     prev = {}
-    source_lat = G.nodes[source]["y"]
-    source_lon = G.nodes[source]["x"]
-    h_source = haversine_distance(source_lat, source_lon, target_lat, target_lon) * heuristic_scale * h_weight
+    source_node_data = G.nodes[source]
+    h_source = haversine_distance(source_node_data["y"], source_node_data["x"], target_lat, target_lon, target_rad=target_rad) * heuristic_scale * h_weight
     pq = [(h_source, 0, source)]
     visited = set()
     nodes_explored = 0
@@ -206,9 +193,8 @@ def astar(G, source, target, weight="travel_time", h_weight=1.0):
             if tentative_g < g_score.get(neighbor, float("inf")):
                 g_score[neighbor] = tentative_g
                 prev[neighbor] = current_node
-                n_lat = G.nodes[neighbor]["y"]
-                n_lon = G.nodes[neighbor]["x"]
-                h = haversine_distance(n_lat, n_lon, target_lat, target_lon) * heuristic_scale * h_weight
+                n_data = G.nodes[neighbor]
+                h = haversine_distance(n_data["y"], n_data["x"], target_lat, target_lon, target_rad=target_rad) * heuristic_scale * h_weight
                 f = tentative_g + h
                 heapq.heappush(pq, (f, tentative_g, neighbor))
 
@@ -297,8 +283,19 @@ def _reconstruct_path(prev, source, target):
     return path
 
 
-# Pre-defined lambda for speed
-_weight_getter = lambda data_dict, w: float(data_dict.get(w, float("inf"))) if not isinstance(data_dict.get(w), list) else float(data_dict.get(w)[0])
+# Robust helper for edge weights
+def _weight_getter(data_dict, w):
+    """Safely extract a float edge weight, handling missing or non-numeric types."""
+    val = data_dict.get(w, float("inf"))
+    
+    # If OSM returned multiple values for this edge, pick the first
+    if isinstance(val, list):
+        val = val[0]
+        
+    try:
+        return float(val if val is not None else float("inf"))
+    except (ValueError, TypeError):
+        return float("inf")
 
 def _get_min_edge_weight(G, u, v, weight):
     """

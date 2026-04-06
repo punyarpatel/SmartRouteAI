@@ -33,7 +33,7 @@ try:
     )
     from smartroute.graph_builder import load_graph, get_nearest_node
     from smartroute.algorithms import compare_algorithms
-    from smartroute.optimizer import optimize_delivery_route
+    from smartroute.optimizer import analyze_delivery_route
     from smartroute.visualizer import (
         plot_route_interactive, plot_multi_stop_route,
         plot_algorithm_comparison, plot_traffic_comparison, plot_delivery_summary
@@ -120,7 +120,6 @@ def main():
 
     import random
     from smartroute.traffic_engine import TrafficPredictor
-    from smartroute.metaheuristics import simulated_annealing_tsp
     from smartroute.experiments import RouteExperiment
     
     total_start = time.time()
@@ -134,8 +133,19 @@ def main():
         mission["place"] = DEFAULT_PLACE
 
     print(f"   🛰️ Stage 4: Loading Road Network for '{mission['place']}'...", file=sys.stderr)
-    G = load_graph(mission["place"])
-    print(f"   🏙️ Graph Density Resolved.", file=sys.stderr)
+    try:
+        G = load_graph(mission["place"], coords=mission.get("place_coords"))
+    except Exception as e:
+        print(f"\n      ❌ CRITICAL: Could not load road network for '{mission['place']}'.", file=sys.stderr)
+        print(f"         Reason: {str(e)}", file=sys.stderr)
+        print(f"         TIP: Try a more specific city/state name.", file=sys.stderr)
+        sys.exit(1)
+        
+    if len(G.nodes) == 0:
+        print(f"\n      ❌ CRITICAL: Graph for '{mission['place']}' is empty.", file=sys.stderr)
+        sys.exit(1)
+        
+    print(f"   🏙️ Graph Density Resolved ({len(G.nodes):,} nodes).", file=sys.stderr)
 
     # 2. Map Locations ── [MISSION DEBUGGER ENABLED]
     print(f"\n📡 RECEIVING MISSION: {len(mission.get('stops', []))} delivery targets.", file=sys.stderr)
@@ -166,7 +176,9 @@ def main():
         print(f"      ❌ MISSION ABORTED: Zero valid delivery stops found in manifest.", file=sys.stderr)
         sys.exit(1)
 
-    all_nodes = [warehouse_node] + stop_nodes
+    # 🚀 COMPLETE THE CIRCUIT: Add warehouse back to the end for a round trip
+    all_nodes = [warehouse_node] + stop_nodes + [warehouse_node]
+    stop_names.append(mission["warehouse"]["name"])
     print(f"🚀 FINAL MISSION LOADED: {len(all_nodes)} nodes in active manifest.", file=sys.stderr)
 
     # 3. AI Algorithm Comparison (No Traffic)
@@ -177,38 +189,34 @@ def main():
     experiment.log_trial("Dijkstra", "None", comp["dijkstra"][2]["execution_time"], comp["dijkstra"][2]["nodes_explored"], comp["dijkstra"][1])
     experiment.log_trial("A*", "None", comp["astar"][2]["execution_time"], comp["astar"][2]["nodes_explored"], comp["astar"][1])
 
-    plot_route_interactive(
-        G, route_astar=comp["astar"][0], route_dijkstra=comp["dijkstra"][0], 
-        visited_astar=comp["astar"][3], visited_dijkstra=comp["dijkstra"][3], 
-        source_node=source, target_node=target, 
-        extra_stops=stop_nodes, extra_stop_names=stop_names[1:],
-        filename="comparison.html"
-    )
+    # Replaced redundant plot_route_interactive call with faster logging
+    print(f"   📈 Phase 1 Analytics: Baseline A* vs Dijkstra computed in {comp['astar'][2]['execution_time']:.4f}s")
 
     # 4. ML-Based Traffic Simulation ── [TIMER START]
     sim_start = time.time()
     hour = int(mission.get("hour", 12))
     sim_incident = mission.get("sim_incident", False)
 
-    # 🚀 Vectorized Extraction for Speed
-    # Instead of looping through thousands of edges in pure Python, we use Pandas
-    edges_df = ox.graph_to_gdfs(G, nodes=False, fill_edge_geometry=False)
+    # 🚀 PORTFOLIO OPTIMIZATION: Extracting features directly from MultiDiGraph
+    features = []
+    edge_refs = []
     
-    # Pre-process road types and lengths in bulk
-    edges_df['road_type'] = edges_df['highway'].apply(lambda x: x[0] if isinstance(x, list) else x)
-    edges_df['hour'] = hour
+    for u, v, k, d in G.edges(keys=True, data=True):
+        hw = d.get("highway", "residential")
+        features.append([hour, hw[0] if isinstance(hw, list) else hw, d.get("length", 100)])
+        edge_refs.append((u, v, k))
     
-    features = edges_df[['hour', 'road_type', 'length']].values.tolist()
     delays = predictor.predict_batch(features)
     
-    # 🏎️ Vectorized Travel Time Update
-    for i, (u, v, k) in enumerate(edges_df.index):
-        data = G.edges[u, v, k]
-        original = float(data.get('travel_time_original', data.get('travel_time', 0)))
-        data['travel_time'] = original + delays[i]
-        
+    # 🏎️ Update Edge Weights directly
+    for i, (u, v, k) in enumerate(edge_refs):
+        d = G.edges[u, v, k]
+        original = float(d.get('travel_time_original', d.get('travel_time', 10)))
+        if 'travel_time_original' not in d:
+             d['travel_time_original'] = original
+        d['travel_time'] = original + delays[i]
         if sim_incident and random.random() < 0.03:
-            data['travel_time'] *= 10.0
+            d['travel_time'] *= 10.0
 
     # 4b. AI Performance Delta (With Traffic) ── [Dynamic Analysis]
     comp_traffic = compare_algorithms(G, source, target, weight=DEFAULT_WEIGHT, h_weight=mission["h_weight"])
@@ -223,38 +231,30 @@ def main():
         filename="route_with_traffic.html"
     )
 
-    print(f"   ⚡ ML Simulation completed for {len(edges_df):,} edges in {time.time() - sim_start:.3f}s")
+    print(f"   ⚡ ML Simulation completed for {len(edge_refs):,} edges in {time.time() - sim_start:.3f}s")
 
-    # 5. Multi-Stop Sequence Optimization (TSP)
-    opt_result = optimize_delivery_route(G, all_nodes, weight=DEFAULT_WEIGHT)
-    dist_matrix = opt_result["distance_matrix"]
+    # 5. Multi-Stop Sequential Analysis (A* vs Dijkstra)
+    analysis = analyze_delivery_route(G, all_nodes, weight=DEFAULT_WEIGHT, h_weight=mission["h_weight"])
     
-    # 🕵️ Metaheuristic Portfolio (Portfolio Logic: Best of 2-opt + SA)
-    opt_order_2opt, opt_cost_2opt = opt_result["optimized_order"], opt_result["optimized_cost"]
-    sa_order, sa_cost = simulated_annealing_tsp(dist_matrix, opt_order_2opt)
-    
-    # Selection of the overall best found sequence
-    final_order, final_cost = (sa_order, sa_cost) if sa_cost < opt_cost_2opt else (opt_order_2opt, opt_cost_2opt)
-    
-    # 🕵️ Sequence Audit
-    print(f"📊 SEQUENCE AUDIT: Final optimized visits: {len(final_order)} nodes total.")
-    improvement_over_greedy = opt_result["greedy_cost"] - final_cost
-    print(f"   ✨ Metaheuristic Discovery: Overall cost reduction of {improvement_over_greedy:.2f}s")
+    print(f"📊 SEQUENCE AUDIT: Analyzed path across {len(all_nodes)} nodes.")
+    improvement_over_dijkstra = analysis["dijkstra"]["execution_time"] - analysis["astar"]["execution_time"]
+    print(f"   ✨ Discovery: A* was {improvement_over_dijkstra:.5f}s faster than Dijkstra.")
 
+    final_order = list(range(len(all_nodes)))
     plot_multi_stop_route(
-        G, segment_paths=opt_result["segment_paths"], 
+        G, segment_paths=analysis["astar"]["segment_paths"], 
         stop_nodes=[all_nodes[i] for i in final_order], 
         stop_names=[stop_names[i] for i in final_order], 
         metrics={
-            "greedy_cost": opt_result["greedy_cost"],
-            "optimized_cost": final_cost,
-            "sa_improvement": round(opt_result["greedy_cost"] - final_cost, 2)
+            "greedy_cost": analysis["dijkstra"]["execution_time"],
+            "optimized_cost": analysis["astar"]["execution_time"],
+            "sa_improvement": improvement_over_dijkstra
         }, 
         filename="delivery_route.html"
     )
     
     # 📊 Final Logistics Chart
-    plot_delivery_summary(opt_result, stop_names=[stop_names[i] for i in final_order], filename="delivery_summary.png")
+    plot_delivery_summary(analysis, stop_names=[stop_names[i] for i in final_order], filename="delivery_summary.png")
 
     # 6. Save Results & Data Export
     experiment.save_to_csv()
@@ -263,7 +263,7 @@ def main():
         "total_time": round(time.time() - total_start, 2),
         "hour": hour,
         "traffic_ml": "Active",
-        "sa_improvement": round(opt_result["greedy_cost"] - final_cost, 2),
+        "sa_improvement": round(improvement_over_dijkstra, 5),
         "comparison_no_traffic": {
             "dijkstra": {"cost": round(comp["dijkstra"][1], 1), "nodes": len(comp["dijkstra"][3])},
             "astar": {"cost": round(comp["astar"][1], 1), "nodes": len(comp["astar"][3])},

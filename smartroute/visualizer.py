@@ -32,11 +32,13 @@ def plot_route_interactive(G, route_astar, route_dijkstra=None,
     """
     Create an interactive HTML map showing the computed route(s) and search space.
     """
-    print(f"\n[MAP] Generating interactive route map...")
+    if not route_astar:
+        print("      ⚠️ WARNING: empty route provided. Mission failed to find path.")
+        return None
 
     route_coords = _nodes_to_coords(G, route_astar)
-    center_lat = np.mean([c[0] for c in route_coords])
-    center_lon = np.mean([c[1] for c in route_coords])
+    center_lat = np.mean([c[0] for c in route_coords]) if route_coords else 0
+    center_lon = np.mean([c[1] for c in route_coords]) if route_coords else 0
 
     m = folium.Map(location=[center_lat, center_lon],
                    zoom_start=14, tiles=MAP_TILES, 
@@ -171,6 +173,10 @@ def plot_multi_stop_route(G, segment_paths, stop_nodes, stop_names=None,
     all_coords = []
     for seg in segment_paths:
         all_coords.extend(_nodes_to_coords(G, seg))
+
+    if not all_coords:
+        print("      ⚠️ Mission failed: No valid coordinates found for the delivery route.")
+        return None
 
     center_lat = np.mean([c[0] for c in all_coords])
     center_lon = np.mean([c[1] for c in all_coords])
@@ -454,8 +460,8 @@ def plot_delivery_summary(optimization_result, stop_names=None,
     fig.suptitle("Multi-Stop Delivery Optimization Results",
                  fontsize=18, fontweight="bold", y=1.02)
 
-    segment_costs = optimization_result["segment_costs"]
-    opt_order = optimization_result["optimized_order"]
+    segment_costs = optimization_result["astar"]["segment_costs"]
+    opt_order = list(range(len(segment_costs) + 1))
 
     # ── Chart 1: Segment Costs ──────────────────────────────
     ax = axes[0]
@@ -495,29 +501,31 @@ def plot_delivery_summary(optimization_result, stop_names=None,
 
     # ── Chart 2: Greedy vs Optimized ────────────────────────
     ax = axes[1]
-    greedy = optimization_result["greedy_cost"]
-    optimized = optimization_result["optimized_cost"]
+    dijkstra = optimization_result["dijkstra"]["execution_time"]
+    astar_time = optimization_result["astar"]["execution_time"]
 
-    bars = ax.bar(["Greedy\nNearest Neighbor", "2-opt\nOptimized"],
-                  [greedy, optimized],
+    bars = ax.bar(["Dijkstra\nCalculation", "A*\nCalculation"],
+                  [dijkstra, astar_time],
                   color=["#E74C3C", "#2ECC71"],
                   width=0.5, edgecolor="white", linewidth=2)
 
-    for bar, val in zip(bars, [greedy, optimized]):
+    for bar, val in zip(bars, [dijkstra, astar_time]):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                f"{val:.1f}", ha="center", va="bottom",
+                f"{val:.5f}s", ha="center", va="bottom",
                 fontsize=13, fontweight="bold")
 
-    improvement = greedy - optimized
-    if improvement > 0:
+    improvement = dijkstra - astar_time
+    if abs(improvement) > 0.00001:
+        prefix = "↓" if improvement > 0 else "↑"
+        label = "saved" if improvement > 0 else "overhead"
         ax.text(0.5, 0.5,
-                f"↓ {improvement:.1f} saved\n({improvement/max(greedy,1e-9)*100:.1f}%)",
+                f"{prefix} {abs(improvement):.5f}s {label}\n({abs(improvement/max(dijkstra,1e-9))*100:.1f}%)",
                 transform=ax.transAxes, ha="center", va="center",
-                fontsize=14, color="#27AE60", fontstyle="italic",
+                fontsize=14, color="#27AE60" if improvement > 0 else "#E67E22", fontstyle="italic",
                 fontweight="bold")
 
-    ax.set_title("Route Optimization", fontsize=13)
-    ax.set_ylabel("Total Travel Cost")
+    ax.set_title("Algorithm Computation Time", fontsize=13)
+    ax.set_ylabel("Total Execution Time (s)")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.yaxis.grid(True, alpha=0.3)
@@ -647,28 +655,30 @@ def _build_metrics_panel(metrics, type="single"):
         pct = (improvement / max(greedy, 1e-9)) * 100
         
         if opt < greedy:
-            winner_text = "🏆 2-opt search found a better route!"
+            winner_text = "🏆 A* was faster!"
             winner_color = "#2ECC71"
+            save_text = f"Saved: {abs(improvement):.4f} sec ({abs(pct):.1f}%)"
         else:
-            winner_text = "🏆 Greedy route was already optimal!"
+            winner_text = "🏆 Dijkstra was faster!"
             winner_color = "#3498DB"
+            save_text = f"Heuristic Overhead: {abs(improvement):.4f} sec ({abs(pct):.1f}%)"
             
         html_content = f"""
-        <b style="font-size:15px; color:#2C3E50; border-bottom:1px solid #eee; display:block; padding-bottom:8px; margin-bottom:8px;">Multi-Stop Optimization</b>
+        <b style="font-size:15px; color:#2C3E50; border-bottom:1px solid #eee; display:block; padding-bottom:8px; margin-bottom:8px;">Multi-Stop Routing Time</b>
         <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-            <span style="color:#7F8C8D;">Greedy Nearest:</span> 
-            <span style="font-weight:bold; color:#E74C3C;">{greedy:.1f} sec ({greedy/60:.1f} min)</span>
+            <span style="color:#7F8C8D;">Dijkstra:</span> 
+            <span style="font-weight:bold; color:#E74C3C;">{greedy:.4f} sec</span>
         </div>
         <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-            <span style="color:#7F8C8D;">2-opt Search:</span> 
-            <span style="font-weight:bold; color:#2ECC71;">{opt:.1f} sec ({opt/60:.1f} min)</span>
+            <span style="color:#7F8C8D;">A* Search:</span> 
+            <span style="font-weight:bold; color:#2ECC71;">{opt:.4f} sec</span>
         </div>
         
         <div style="margin-top:10px; border-top:1px solid #eee; padding-top:8px; text-align:center;">
             <span style="font-weight:bold; color:{winner_color}; font-size:13px;">{winner_text}</span>
         </div>
         <div style="display:flex; justify-content:center; margin-top:4px;">
-            <span style="color:#7F8C8D; font-size:12px;">Saved: {improvement:.1f} sec ({improvement/60:.2f} min) ({pct:.1f}%)</span>
+            <span style="color:#7F8C8D; font-size:12px;">{save_text}</span>
         </div>
         """
 

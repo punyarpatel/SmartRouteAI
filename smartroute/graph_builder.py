@@ -19,35 +19,18 @@ from smartroute.config import CACHE_DIR, DEFAULT_PLACE, NETWORK_TYPE
 # GRAPH LOADING & CACHING
 # ──────────────────────────────────────────────────────────────
 
-def load_graph(place_name=DEFAULT_PLACE, network_type=NETWORK_TYPE,
+def load_graph(place_name=DEFAULT_PLACE, coords=None, network_type=NETWORK_TYPE,
                use_cache=True):
     """
     Load a road network graph from OpenStreetMap.
 
-    Downloads the graph for the given place using OSMnx, adds speed
-    and travel-time attributes to every edge, and optionally caches
-    the result to disk for faster subsequent loads.
-
-    Args:
-        place_name  (str):  Name of the place (city, neighborhood, etc.)
-        network_type (str): Road network type — "drive", "walk", "bike", "all"
-        use_cache   (bool): If True, load from disk cache when available
-
-    Returns:
-        G (nx.MultiDiGraph): The road network graph with attributes:
-            - Nodes: 'x' (longitude), 'y' (latitude), 'street_count'
-            - Edges: 'length' (meters), 'speed_kph', 'travel_time' (seconds)
-
-    Example:
-        >>> G = load_graph("Manhattan, New York, USA")
-        >>> print(f"Loaded {len(G.nodes)} intersections, {len(G.edges)} road segments")
+    Downloads the graph using OSMnx. If coords are provided, uses graph_from_point,
+    otherwise uses graph_from_place.
     """
-    # Build a safe filename from the place name for caching
     safe_name = str(place_name).lower().replace(" ", "_").replace(",", "").replace("[", "").replace("]", "").replace("'", "")
     safe_name = "".join(c for c in safe_name if c.isalnum() or c == "_")
     cache_path = os.path.join(CACHE_DIR, f"{safe_name}_{network_type}.graphml")
 
-    # ── Try loading from cache first ───────────────────────────
     import sys
     if use_cache and os.path.exists(cache_path):
         print(f"   [CACHE] Loading cached graph: {cache_path}", file=sys.stderr)
@@ -56,22 +39,43 @@ def load_graph(place_name=DEFAULT_PLACE, network_type=NETWORK_TYPE,
         elapsed = time.time() - start
         print(f"      ✅ OK - Loaded from cache in {elapsed:.2f}s — "
               f"{len(G.nodes):,} nodes, {len(G.edges):,} edges", file=sys.stderr)
+        
+        # ── Ensure cached graph is route-safe ──────────────────
+        if not nx.is_strongly_connected(G):
+            print("      ⚠️  Cached graph is disconnected! Filtering...", file=sys.stderr)
+            largest_scc = max(nx.strongly_connected_components(G), key=len)
+            G = G.subgraph(largest_scc).copy()
+            print(f"      ✅ Graph reduced to {len(G.nodes):,} nodes for routing safety.", file=sys.stderr)
+            # Re-save the healthy graph
+            ox.io.save_graphml(G, cache_path)
+        
         return G
 
-    # ── Download from OpenStreetMap ────────────────────────────
     print(f"   [OSM] Downloading road network for: '{place_name}'", file=sys.stderr)
-    print(f"      (This may take up to 2 minutes for large cities)", file=sys.stderr)
     start = time.time()
 
     try:
-        G = ox.graph.graph_from_place(place_name, network_type=network_type)
+        if coords and isinstance(coords, dict) and "lat" in coords and "lon" in coords:
+             # Use coordinates to prevent geocoding boundary errors with long display_names
+             G = ox.graph.graph_from_point((coords["lat"], coords["lon"]), dist=15000, network_type=network_type)
+        else:
+             G = ox.graph.graph_from_place(place_name, network_type=network_type)
     except Exception as e:
         print(f"\n      ❌ CRITICAL: OSMnx Download Failed for '{place_name}': {e}", file=sys.stderr)
-        print(f"      Tip: Double-check your city name and internet connection.", file=sys.stderr)
         raise e
 
     download_time = time.time() - start
     print(f"      ✅ Downloaded from OSM in {download_time:.2f}s", file=sys.stderr)
+
+    # ── Cleanup disconnected islands ──────────────────────────
+    # Guarantee we can route between any two points in our graph
+    print("      🔍 Filtering for largest strongly connected component...", file=sys.stderr)
+    if not nx.is_strongly_connected(G):
+        largest_scc = max(nx.strongly_connected_components(G), key=len)
+        G = G.subgraph(largest_scc).copy()
+        print(f"      ⚠️  Graph was disconnected. Reduced to {len(G.nodes):,} nodes.", file=sys.stderr)
+    else:
+        print("      ✅ Graph is fully connected.", file=sys.stderr)
 
     # ── Add speed and travel time to edges ─────────────────────
     print("      ⚡ Computing AI edge weights (traffic speeds)...", file=sys.stderr)
