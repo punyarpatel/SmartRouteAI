@@ -173,6 +173,7 @@ export default function SmartRouteDashboard() {
 
   // Mission State
   const [place, setPlace] = useState('');
+  const [placeCoords, setPlaceCoords] = useState<any>(null);
   const [hWeight, setHWeight] = useState(1.0);
   const [hour, setHour] = useState(12);
   const [simIncident, setSimIncident] = useState(false);
@@ -180,15 +181,22 @@ export default function SmartRouteDashboard() {
 
   const addStop = () => setStops([...stops, { name: "", address: "" }]);
   const removeStop = (index: number) => setStops(stops.filter((_, i) => i !== index));
-  const updateStop = (index: number, field: string, value: string) => {
-    const newStops = [...stops];
-    (newStops[index] as any)[field] = value;
-    setStops(newStops);
+  const updateStop = (index: number, updates: any) => {
+    setStops(prevStops => {
+      const newStops = [...prevStops];
+      newStops[index] = { ...newStops[index], ...updates };
+      return newStops;
+    });
   };
 
   const runPipeline = async () => {
     if (!place.trim()) {
       setError("🛰️ MISSION ABORTED: Please enter a target city (e.g., 'Gandhinagar') before deploying the AI engine.");
+      return;
+    }
+
+    if (stops.length === 0 || !stops.some(s => s.address && s.address.trim() !== "")) {
+      setError("🛰️ MISSION ABORTED: No destinations provided in Logistics Chain. Please add at least one stop.");
       return;
     }
 
@@ -207,7 +215,8 @@ export default function SmartRouteDashboard() {
 
     const mission = {
         place,
-        warehouse: { name: "Warehouse", address: place },
+        place_coords: placeCoords,
+        warehouse: { name: "Warehouse", address: place, lat: placeCoords?.lat, lon: placeCoords?.lon },
         h_weight: hWeight,
         hour,
         sim_incident: simIncident,
@@ -300,7 +309,10 @@ export default function SmartRouteDashboard() {
                         <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1 block">Operational Area</label>
                         <AutocompleteInput 
                             value={place} 
-                            onSelect={(loc: any) => setPlace(loc.display_name)}
+                            onSelect={(loc: any) => {
+                                setPlace(loc.display_name);
+                                setPlaceCoords({ lat: parseFloat(loc.lat), lon: parseFloat(loc.lon) });
+                            }}
                             placeholder="Set Target City..."
                             className="bg-transparent!"
                         />
@@ -369,7 +381,13 @@ export default function SmartRouteDashboard() {
                                     <div className="flex-grow">
                                         <AutocompleteInput 
                                             value={stop.address}
-                                            onSelect={(loc: any) => updateStop(i, 'address', loc.display_name)}
+                                            onSelect={(loc: any) => {
+                                                updateStop(i, {
+                                                  address: loc.display_name,
+                                                  lat: parseFloat(loc.lat),
+                                                  lon: parseFloat(loc.lon)
+                                                });
+                                            }}
                                             placeholder="Stop location..."
                                             className="!py-2.5 !text-[11px]"
                                             icon={Navigation}
@@ -412,7 +430,7 @@ export default function SmartRouteDashboard() {
               ) : (
                 <>
                   <Zap className="w-5 h-5 fill-white" />
-                  <span className="text-sm">DEPLOY MISSION</span>
+                  <span className="text-sm">CALCULATE ROUTE</span>
                 </>
               )}
             </button>
@@ -672,7 +690,7 @@ export default function SmartRouteDashboard() {
                  )}
               </Card>
               
-              <Card title="Sequence Efficiency" subtitle="Improvement delta vs Greedy approach" icon={BarChart3}>
+              <Card title="Sequence Efficiency" subtitle="Execution time delta vs Dijkstra" icon={BarChart3}>
                 <div className="relative rounded-3xl overflow-hidden border border-white/5 shadow-2xl group/img">
                   <img 
                     key={iframeKey}
@@ -688,18 +706,25 @@ export default function SmartRouteDashboard() {
               <Card title="Solver Engine" subtitle="Metaheuristic Core" icon={Zap}>
                 <div className="p-8 bg-emerald-500/5 rounded-3xl border border-emerald-500/10 mb-8 relative overflow-hidden group">
                     <div className="relative z-10">
-                      <div className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-4 opacity-70">Optimization Delta</div>
-                      {results?.sa_improvement === '0.0' || results?.sa_improvement === 0 || results?.sa_improvement === '0.00' ? (
+                      <div className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-4 opacity-70">Computation Time Delta</div>
+                      {Math.abs(results?.sa_improvement || 0) < 0.0001 ? (
                         <div className="flex flex-col gap-1 py-1">
-                          <div className="text-2xl font-black text-emerald-500 uppercase tracking-tight leading-none mb-1">Optimality Confirmed</div>
-                          <div className="text-[10px] font-black text-emerald-600/70 uppercase">Greedy solution validated by metaheuristic search</div>
+                          <div className="text-2xl font-black text-emerald-500 uppercase tracking-tight leading-none mb-1">Equal Performance</div>
+                          <div className="text-[10px] font-black text-emerald-600/70 uppercase">A* and Dijkstra were equally fast</div>
+                        </div>
+                      ) : results?.sa_improvement < 0 ? (
+                        <div className="flex flex-col">
+                          <div className="text-4xl font-black text-orange-500 font-display leading-none mb-1">
+                              {Math.abs(results.sa_improvement)}s
+                          </div>
+                          <div className="text-[10px] font-bold text-orange-600/70 uppercase">Heuristic Overhead (Small Graph)</div>
                         </div>
                       ) : (
                         <div className="flex flex-col">
                           <div className="text-4xl font-black text-foreground font-display leading-none mb-1">
                               {results?.sa_improvement ? `${results.sa_improvement}s` : '0.00s'}
                           </div>
-                          <div className="text-[10px] font-bold text-emerald-600/70 uppercase">Time Saved vs Greedy</div>
+                          <div className="text-[10px] font-bold text-emerald-600/70 uppercase">Time Saved vs Dijkstra</div>
                         </div>
                       )}
                     </div>
@@ -732,7 +757,7 @@ export default function SmartRouteDashboard() {
                       Operational Logic
                     </div>
                     <p className="text-xs text-emerald-900/70 dark:text-emerald-400/70 leading-relaxed font-bold">
-                      2-opt refinement with Boltzmann annealing. Guaranteed local optima escape via probabilistic jump logic.
+                      A* uses a heuristic-guided approach, often greatly reducing nodes explored versus Dijkstra's exhaustive search, especially on sequential multi-stop paths.
                     </p>
                   </div>
                 </div>
@@ -748,7 +773,7 @@ export default function SmartRouteDashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
                     {[
                       { name: 'Search Performance Delta', file: 'algorithm_comparison_no_traffic.png', desc: 'Comparison of search space coverage and node expansion.' },
-                      { name: 'Metaheuristic Trace', file: 'delivery_summary.png', desc: 'Energy minimization curve and route distance convergence.' },
+                      { name: 'Metaheuristic Trace', file: 'delivery_summary.png', desc: 'Dijkstra vs A* Computation Time Sequential Analysis.' },
                       { name: 'Predictive Traffic Delta', file: 'traffic_impact_comparison.png', desc: 'Real-time vs historical traffic impact on edge weights.' }
                     ].map((item, i) => (
                       <div key={i} className={`group flex flex-col gap-6 ${i === 2 ? 'lg:col-span-2' : ''}`}>
